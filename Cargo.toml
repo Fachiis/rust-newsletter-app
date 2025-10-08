@@ -2,5 +2,22 @@
 name = "zero2prod"
 version = "0.1.0"
 edition = "2021"
+authors = ["Zasha Fachii Felix<zashafachii@gmail.com>"]
+
+[lib] # If converting a binary crate to a library crate, specify the library file path here
+path = "src/lib.rs" # Path to the library file. We default to the package.name if unspecified.
+
+# We can only have one library in a project, but we can have multiple binaries.
+# To add more binaries, create a `src/bin` directory and add files there.
+# Each file in `src/bin` will be compiled as a separate binary.
+[[bin]]
+path = "src/main.rs" # Path to the binary file
+name = "zero2prod" # Name of the binary
 
 [dependencies]
+actix-web = "4.11.0"
+tokio = { version = "1.47.1", features = ["rt", "rt-multi-thread", "macros"] }
+
+# Used exclusively for testing or when running examples. They do not get compiled into the final binary.
+[dev-dependencies]
+reqwest = { version = "0.11", features = ["json"] }

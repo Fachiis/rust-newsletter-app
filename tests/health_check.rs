@@ -27,14 +27,14 @@ async fn health_check_works() {
 
 fn spawn_app() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind to random port");
-    
+
     // Get the port assigned to us by the OS
     let port = listener.local_addr().unwrap().port();
     let server = zero2prod::run(listener).expect("Failed to bind address");
     // Launch the server as a background task
     // tokio::spawn returns a handle to the spawned future
     let _ = tokio::spawn(server);
-    
+
     // Return the address to the caller
     format!("http://127.0.0.1:{}", port)
 }

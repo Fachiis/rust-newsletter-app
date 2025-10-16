@@ -14,5 +14,6 @@ pub struct FormData {
 // • if Form::from_request fails, a 400 BAD REQUEST is returned to the caller. If it succeeds,
 // subscribe is invoked and we return a 200 OK.
 pub async fn subscribe(_form: web::Form<FormData>) -> HttpResponse {
+    let _ = format!("{} - {}", _form.email, _form.name);
     HttpResponse::Ok().finish()
 }

@@ -18,6 +18,19 @@ name = "zero2prod" # Name of the binary
 actix-web = "4.11.0"
 tokio = { version = "1.47.1", features = ["rt", "rt-multi-thread", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
+config = "0.15.18"
+
+[dependencies.sqlx]
+version = "0.8.6"
+default-features = false
+features = [
+    "runtime-tokio-rustls", # Use the Rustls TLS implementation with SQLx
+    "macros", # Give us the ability to use the `query!` and `query_as!` macros
+    "postgres", # Give us the Postgres specific functionality
+    "uuid", # Support for the `uuid` crate
+    "chrono", # Support for the `chrono` crate. Needed for date and time handling
+    "migrate" # Support for database migrations
+]
 
 # Used exclusively for testing or when running examples. They do not get compiled into the final binary.
 [dev-dependencies]

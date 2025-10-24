@@ -1,4 +1,8 @@
 use actix_web::{web, HttpResponse};
+use chrono::Utc;
+use sqlx::PgPool;
+use tracing::Instrument;
+use uuid::Uuid;
 
 #[derive(serde::Deserialize)]
 pub struct FormData {
@@ -6,14 +10,36 @@ pub struct FormData {
     email: String,
 }
 
-// • before calling subscribe actix-web invokes the from_request method for all subscribe’s
-// input arguments: in our case, Form::from_request;
-// • Form::from_request tries to deserialise the body into FormData according to the rules of URL-
-// encoding leveraging serde_urlencoded and the Deserialize implementation of FormData,
-// automatically generated for us by #[derive(serde::Deserialize)];
-// • if Form::from_request fails, a 400 BAD REQUEST is returned to the caller. If it succeeds,
-// subscribe is invoked and we return a 200 OK.
-pub async fn subscribe(_form: web::Form<FormData>) -> HttpResponse {
-    let _ = format!("{} - {}", _form.email, _form.name);
-    HttpResponse::Ok().finish()
+// form -> we use one of the
+pub async fn subscribe(form: web::Form<FormData>, pool: web::Data<PgPool>) -> HttpResponse {
+    let request_id = Uuid::new_v4(); // Use the request_id to correlate all logs related to the same request
+    let request_span = tracing::info_span!(
+        "Adding a new subscriber",
+        %request_id,
+        subscriber_email=%form.email,
+        subscriber_name=%form.name
+    );
+    let _request_span_guard = request_span.enter();
+
+    let query_span = tracing::info_span!("Saving new subscriber details in the database");
+
+    match sqlx::query!(
+        r#"INSERT INTO subscriptions (id, email, name, subscribed_at)
+        VALUES ($1, $2, $3, $4)
+        "#,
+        Uuid::new_v4(),
+        form.email,
+        form.name,
+        Utc::now()
+    )
+    .execute(pool.get_ref())
+    .instrument(query_span)
+    .await
+    {
+        Ok(_) => HttpResponse::Ok().finish(),
+        Err(e) => {
+            tracing::error!("Failed to execute query: {:?}", e);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
 }

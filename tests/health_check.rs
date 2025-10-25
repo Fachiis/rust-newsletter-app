@@ -1,7 +1,25 @@
+use once_cell::sync::Lazy;
+use secrecy::ExposeSecret;
 use sqlx::{Connection, Executor, PgConnection, PgPool};
 use std::net::TcpListener;
 use uuid::Uuid;
 use zero2prod::configuration::{get_configuration, DatabaseSettings};
+use zero2prod::telemetry::{get_subscriber, init_subscriber};
+
+static TRACING: Lazy<()> = Lazy::new(|| {
+    let default_filter_level = "info".to_string();
+    let subscriber_name = "test".to_string();
+
+    // Initialized once and used for the rest of the tests
+    // With test_log env, all logs will be outputted
+    if std::env::var("TEST_LOG").is_ok() {
+        let subscriber = get_subscriber(subscriber_name, default_filter_level, std::io::stdout);
+        init_subscriber(subscriber);
+    } else {
+        let subscriber = get_subscriber(subscriber_name, default_filter_level, std::io::sink);
+        init_subscriber(subscriber);
+    }
+});
 
 pub struct TestApp {
     pub address: String,
@@ -11,9 +29,10 @@ pub struct TestApp {
 pub async fn configure_database(config: &DatabaseSettings) -> PgPool {
     // Create test DB
     println!("Connecting to Postgres (without DB name)...");
-    let mut connection = PgConnection::connect(&config.connection_string_without_db_name())
-        .await
-        .expect("Failed to connect to Postgres");
+    let mut connection =
+        PgConnection::connect(config.connection_string_without_db_name().expose_secret())
+            .await
+            .expect("Failed to connect to Postgres");
     println!("Connected to Postgres (without DB name).");
 
     println!("Creating database {}...", config.database_name);
@@ -25,7 +44,7 @@ pub async fn configure_database(config: &DatabaseSettings) -> PgPool {
 
     // Migrate test DB
     println!("Connecting to the newly created database...");
-    let connection_pool = PgPool::connect(&config.connection_string())
+    let connection_pool = PgPool::connect(config.connection_string().expose_secret())
         .await
         .expect("Failed to connect to running postgres instance");
     println!("Connected to the newly created database.");
@@ -43,6 +62,10 @@ pub async fn configure_database(config: &DatabaseSettings) -> PgPool {
 }
 
 async fn spawn_app() -> TestApp {
+    // The first time `initialize` is invoked the code in `TRACING` is executed.
+    // All other invocations will instead skip execution.
+    Lazy::force(&TRACING);
+
     let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind to random port");
     // Get the port assigned to us by the OS
     let port = listener.local_addr().unwrap().port();

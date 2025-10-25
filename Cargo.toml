@@ -25,6 +25,8 @@ tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry", "fmt"] } # For setting up tracing subscribers
 tracing-bunyan-formatter = "0.3" # For structured logging
 tracing-log = "0.2" # For integrating tracing with the log crate
+secrecy = { version = "0.10", features = ["serde"]} # For handling secret values
+tracing-actix-web = "0.7" # For integrating tracing with actix-web
 
 [dependencies.sqlx]
 version = "0.8.6"
@@ -41,3 +43,4 @@ features = [
 # Used exclusively for testing or when running examples. They do not get compiled into the final binary.
 [dev-dependencies]
 reqwest = { version = "0.11", features = ["json"] }
+once_cell = "1" # lets you initialize something once

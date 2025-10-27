@@ -3,7 +3,7 @@ use tracing::Subscriber;
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_log::LogTracer;
 use tracing_subscriber::fmt::MakeWriter;
-use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Registry};
+use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter, Registry};
 
 // Tracing is a framework for instrumenting Rust programs to collect
 // structured, event-based diagnostic information. This is like logging, but more advanced.
@@ -26,24 +26,24 @@ pub fn get_subscriber<Sink>(
     sink: Sink,
 ) -> impl Subscriber + Sync + Send
 where
-    Sink: for<'a> MakeWriter<'a> + Send + Sync + 'static,
+    Sink: for<'a> MakeWriter<'a> + Send + Sync + Clone + 'static,
 {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::from_env(env_filter));
-    let formatting_layer = BunyanFormattingLayer::new(name, sink);
+    let formatting_layer = BunyanFormattingLayer::new(name, sink.clone());
+
     Registry::default()
         .with(env_filter)
         .with(JsonStorageLayer)
         .with(formatting_layer)
-
-    // tracing_subscriber::fmt().init();
-    //
-    // let _subscriber = tracing_subscriber::fmt()
-    //     .with_env_filter(EnvFilter::from_default_env())
-    //     .with_target(true)
-    //     .with_file(true)
-    //     .with_line_number(true)
-    //     .finish();
+        .with(
+            fmt::layer()
+                .with_writer(sink)
+                .pretty()
+                .with_target(true)
+                .with_file(true)
+                .with_line_number(true),
+        )
 }
 
 /// Register a subscriber as global default to process span data.

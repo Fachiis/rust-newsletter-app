@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Zasha Fachii Felix<zashafachii@gmail.com>"]
 
+[profile.release]
+lto = true # Enable Link Time Optimization for better performance in release builds
+strip = true # Strip symbols from the binary to reduce size
+
 [lib] # If converting a binary crate to a library crate, specify the library file path here
 path = "src/lib.rs" # Path to the library file. We default to the package.name if unspecified.
 
@@ -37,7 +41,7 @@ features = [
     "postgres", # Give us the Postgres specific functionality
     "uuid", # Support for the `uuid` crate
     "chrono", # Support for the `chrono` crate. Needed for date and time handling
-    "migrate" # Support for database migrations
+    "migrate", # Support for database migrations,
 ]
 
 # Used exclusively for testing or when running examples. They do not get compiled into the final binary.

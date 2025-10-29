@@ -43,5 +43,5 @@ databases:
   - name: newsletter
     engine: PG
     num_nodes: 1
-    size: db-s-1vcpu-1gb
+    size: db-s-dev-database
     version: "14"

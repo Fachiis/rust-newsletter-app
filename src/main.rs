@@ -19,7 +19,8 @@ async fn main() -> std::io::Result<()> {
     // connect_lazy: creates a connection pool but does not try to connect to the DB until the first query is executed (sync).
     // Set a timeout for acquiring a connection from the pool.Default is 30 seconds.
     let connection_pool = PgPoolOptions::new()
-        .acquire_timeout(std::time::Duration::from_secs(2))
+        .max_connections(5)
+        .acquire_timeout(std::time::Duration::from_secs(3))
         .connect_lazy_with(configuration.database.with_db());
 
     // Get the port number

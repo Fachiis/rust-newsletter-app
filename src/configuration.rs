@@ -81,7 +81,7 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
     // Add in settings from environment variables (with a prefix of APP and '__' as separator)
     // This allows us to override configuration values using environment variables
     // E.g. `APP_APPLICATION__PORT=5001` would set `Settings.application.port`
-    settings = settings.add_source(config::Environment::with_prefix("APP").separator("__"));
+    settings = settings.add_source(config::Environment::with_prefix("app").separator("__"));
 
     // Build the configuration
     let settings = settings.build()?;

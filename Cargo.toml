@@ -31,6 +31,7 @@ tracing-bunyan-formatter = "0.3" # For structured logging
 tracing-log = "0.2" # For integrating tracing with the log crate
 secrecy = { version = "0.10", features = ["serde"]} # For handling secret values
 tracing-actix-web = "0.7" # For integrating tracing with actix-web
+serde-aux = "4" # For auxiliary serde functionality, like deserializing number from string
 
 [dependencies.sqlx]
 version = "0.8.6"

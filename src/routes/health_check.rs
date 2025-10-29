@@ -14,7 +14,7 @@ pub async fn health_check(pool: web::Data<PgPool>) -> HttpResponse {
         }
         Err(e) => {
             tracing::error!("Database connection failed: {:?}", e);
-            HttpResponse::ServiceUnavailable().finish()
+            HttpResponse::InternalServerError().finish()
         }
     }
 }

@@ -20,11 +20,12 @@ async fn main() -> std::io::Result<()> {
     // Set a timeout for acquiring a connection from the pool.Default is 30 seconds.
     let connection_pool = {
         tracing::info!(
-            "Connecting to Postgres at {}:{} as user {} for database {}",
+            "Connecting to Postgres at {}:{} as user {} for database {} with ssl_mode={}",
             configuration.database.host,
             configuration.database.port,
             configuration.database.username,
-            configuration.database.database_name
+            configuration.database.database_name,
+            configuration.database.require_ssl
         );
         PgPoolOptions::new()
             .acquire_timeout(std::time::Duration::from_secs(10))

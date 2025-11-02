@@ -52,42 +52,36 @@ impl DatabaseSettings {
 }
 
 pub fn get_configuration() -> Result<Settings, config::ConfigError> {
-    // Initialize our config reader
-    // let settings = config::Config::builder()
-    //     .add_source(config::File::with_name("configuration"))
-    //     .build()?
-    //     .try_deserialize()?; // propagate the error with ?
-    //
-    // Ok(settings)
-    let mut settings = config::Config::builder();
+    // Determine the base path and configuration directory
     let base_path = std::env::current_dir().expect("Failed to determine the current directory");
     let configuration_directory = base_path.join("configuration");
 
-    // read and merge the base configuration file
-    settings = settings
-        .add_source(config::File::from(configuration_directory.join("base")).required(true));
-
-    // Detect the running environment. Default to "local" if not set
+    // Detect the running environment: defaults to "local"
     let environment: Environment = std::env::var("APP_ENVIRONMENT")
         .unwrap_or_else(|_| "local".into())
         .try_into()
         .expect("Failed to parse APP_ENVIRONMENT.");
 
-    // Base on the detected environment, load the corresponding configuration file
-    settings = settings.add_source(
-        config::File::from(configuration_directory.join(environment.as_str())).required(true),
-    );
+    // Start building configuration
+    let mut settings = config::Config::builder()
+        // Always load the base.yaml (common defaults)
+        .add_source(config::File::from(configuration_directory.join("base")).required(true))
+        // Load the environment-specific file (local.yaml or production.yaml)
+        .add_source(
+            config::File::from(configuration_directory.join(environment.as_str())).required(false),
+        )
+        // Add environment variables (override YAML values)
+        .add_source(
+            config::Environment::with_prefix("app")
+                .separator("__")
+                .try_parsing(true)
+                .list_separator(",")
+                .with_list_parse_key("application.host"),
+        );
 
-    // Add in settings from environment variables (with a prefix of APP and '__' as separator)
-    // This allows us to override configuration values using environment variables
-    // E.g. `APP_APPLICATION__PORT=5001` would set `Settings.application.port`
-    settings = settings.add_source(config::Environment::with_prefix("app").separator("__"));
-
-    // Build the configuration
+    // Build and deserialize the merged configuration
     let settings = settings.build()?;
-
-    // Deserialize the configuration
-    settings.try_deserialize()
+    settings.try_deserialize::<Settings>()
 }
 
 /// Possible runtime environments for our application

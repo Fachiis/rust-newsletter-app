@@ -18,10 +18,20 @@ async fn main() -> std::io::Result<()> {
     // connect: creates a connection pool and tries to connect to the DB immediately (async)
     // connect_lazy: creates a connection pool but does not try to connect to the DB until the first query is executed (sync).
     // Set a timeout for acquiring a connection from the pool.Default is 30 seconds.
-    let connection_pool = PgPoolOptions::new()
-        .max_connections(5)
-        .acquire_timeout(std::time::Duration::from_secs(3))
-        .connect_lazy_with(configuration.database.with_db());
+    let connection_pool = {
+        tracing::info!(
+            "Connecting to Postgres at {}:{} as user {} for database {}",
+            configuration.database.host,
+            configuration.database.port,
+            configuration.database.username,
+            configuration.database.database_name
+        );
+        PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_secs(10))
+            .connect_with(configuration.database.with_db())
+            .await
+            .expect("Failed to connect to the database")
+    };
 
     // Get the port number
     let address = format!(

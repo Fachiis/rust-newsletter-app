@@ -63,7 +63,7 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
         .expect("Failed to parse APP_ENVIRONMENT.");
 
     // Start building configuration
-    let mut settings = config::Config::builder()
+    let settings = config::Config::builder()
         // Always load the base.yaml (common defaults)
         .add_source(config::File::from(configuration_directory.join("base")).required(true))
         // Load the environment-specific file (local.yaml or production.yaml)

@@ -25,10 +25,20 @@ pub struct DatabaseSettings {
     pub host: String,
     pub database_name: String,
     pub require_ssl: bool,
+    pub connection_string: Option<SecretBox<String>>,
 }
 
 impl DatabaseSettings {
     pub fn without_db(&self) -> PgConnectOptions {
+        // If a connection_string is provided, use it directly
+        if let Some(conn_str) = &self.connection_string {
+            return conn_str
+                .expose_secret()
+                .parse::<PgConnectOptions>()
+                .expect("Failed to parse connection string into PgConnectOptions");
+        }
+
+        // Otherwise, build the connection options from individual settings
         let ssl_mode = if self.require_ssl {
             PgSslMode::Require
         } else {
@@ -44,6 +54,17 @@ impl DatabaseSettings {
     }
 
     pub fn with_db(&self) -> PgConnectOptions {
+        // If a connection_string is provided, use it directly
+        if let Some(conn_str) = &self.connection_string {
+            let mut options = conn_str
+                .expose_secret()
+                .parse::<PgConnectOptions>()
+                .expect("Failed to parse connection string into PgConnectOptions");
+            options = options.log_statements(tracing::log::LevelFilter::Trace);
+            return options;
+        }
+
+        // Otherwise, build the connection options from individual settings
         let mut options = self.without_db().database(&self.database_name);
         // for debugging purposes, log all statements
         options = options.log_statements(tracing::log::LevelFilter::Trace);

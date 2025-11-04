@@ -13,35 +13,18 @@ async fn main() -> std::io::Result<()> {
 
     // Panic if we can't read configuration
     let configuration = get_configuration().expect("Failed to read configuration");
-
-    // Read the DATABASE_URL directly from the environment
-    let database_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL environment variable must be set");
-
-    tracing::info!("Connecting to DB with the DATABASE_URL: {}", database_url);
-    let connection_pool = PgPool::connect(&database_url)
-        .await
-        .expect("Failed to connect to Postgres");
-
-    // connect to the db pool
-    // connect: creates a connection pool and tries to connect to the DB immediately (async)
-    // connect_lazy: creates a connection pool but does not try to connect to the DB until the first query is executed (sync).
-    // Set a timeout for acquiring a connection from the pool.Default is 30 seconds.
-    // let connection_pool = {
-    //     tracing::info!(
-    //         "Connecting to Postgres at {}:{} as user {} for database {} with ssl_mode={}",
-    //         configuration.database.host,
-    //         configuration.database.port,
-    //         configuration.database.username,
-    //         configuration.database.database_name,
-    //         configuration.database.require_ssl
-    //     );
-    //     PgPoolOptions::new()
-    //         .acquire_timeout(std::time::Duration::from_secs(10))
-    //         .connect_with(configuration.database.with_db())
-    //         .await
-    //         .expect("Failed to connect to the database")
-    // };
+    // Create connection pool. Use the DATABASE_URL env variable if it exists for flexibility in deployment scenarios OR fall back to config file.
+    let connection_pool = if let Ok(database_url) = std::env::var("DATABASE_URL") {
+        tracing::info!("Connecting to DB with the DATABASE_URL from env variable.");
+        PgPool::connect(&database_url)
+            .await
+            .expect("Failed to connect to Postgres")
+    } else {
+        tracing::info!("Connecting to DB with the configuration file.");
+        PgPool::connect_with(configuration.database.with_db())
+            .await
+            .expect("Failed to connect to Postgres")
+    };
 
     // Get the port number
     let address = format!(

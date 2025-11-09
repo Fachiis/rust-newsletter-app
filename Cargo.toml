@@ -32,6 +32,8 @@ tracing-log = "0.2" # For integrating tracing with the log crate
 secrecy = { version = "0.10", features = ["serde"]} # For handling secret values
 tracing-actix-web = "0.7" # For integrating tracing with actix-web
 serde-aux = "4" # For auxiliary serde functionality, like deserializing number from string
+unicode-segmentation = "1" # For handling Unicode string segmentation
+validator = "0.20" # For validating input data
 
 [dependencies.sqlx]
 version = "0.8.6"
@@ -47,5 +49,9 @@ features = [
 
 # Used exclusively for testing or when running examples. They do not get compiled into the final binary.
 [dev-dependencies]
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.11", features = ["json"] } # For making HTTP requests in tests
 once_cell = "1" # lets you initialize something once
+claim = "0.5" # Provides macros for more ergonomic assertions in tests for Options and Results
+fake = "~2.3" # For generating fake data in tests
+quickcheck = "0.9.2" #  property-based testing library that generates random test data to verify your code properties hold true across many inputs.
+quickcheck_macros = "0.9.1" # For using macros with quickcheck

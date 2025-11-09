@@ -168,3 +168,40 @@ async fn subscribe_returns_a_400_when_data_is_missing() {
         )
     }
 }
+
+#[tokio::test]
+async fn subscribe_returns_a_400_when_fields_are_present_but_invalid() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let test_cases = [
+        ("name=&email=felixo%40gmail.com", "empty name"),
+        ("name=zasha%20felixo&email=", "empty email"),
+        (
+            "name=zasha%20felixo&email=definitely-not-an-email",
+            "invalid email",
+        ),
+    ];
+
+    for (body, description) in test_cases {
+        let response = client
+            .post(format!("{}/subscriptions", &app.address))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .expect("Failed to execute request.");
+
+        assert_eq!(
+            400,
+            response.status().as_u16(),
+            "The API did not return a 200 OK when the payload was {}",
+            description
+        );
+    }
+}
+
+// #[test]
+// fn dummy_fail() {
+//     let result: Result<&str, &str> = Err("This is a dummy failure");
+//     claim::assert_ok!(result);
+// }

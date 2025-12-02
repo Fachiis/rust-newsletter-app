@@ -1,51 +1,19 @@
-use sqlx::PgPool;
-use std::net::TcpListener;
 use zero2prod::configuration::get_configuration;
-use zero2prod::email_client::EmailClient;
-use zero2prod::startup::run;
+use zero2prod::startup::Application;
 use zero2prod::telemetry::{get_subscriber, init_subscriber};
 
 // Entry point of the application
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    // span data tracing init
+    // set up logging/tracing
     let subscriber = get_subscriber("zero2prod".into(), "info".into(), std::io::stdout);
     init_subscriber(subscriber);
 
-    // Panic if we can't read configuration
+    // Build the application state and get back a server
     let configuration = get_configuration().expect("Failed to read configuration");
-    // Create connection pool. Use the DATABASE_URL env variable if it exists for flexibility in deployment scenarios OR fall back to config file.
-    let connection_pool = if let Ok(database_url) = std::env::var("DATABASE_URL") {
-        tracing::info!("Connecting to DB with the DATABASE_URL from env variable.");
-        PgPool::connect(&database_url)
-            .await
-            .expect("Failed to connect to Postgres")
-    } else {
-        tracing::info!("Connecting to DB with the configuration file.");
-        PgPool::connect_with(configuration.database.with_db())
-            .await
-            .expect("Failed to connect to Postgres")
-    };
+    let application = Application::build(configuration).await?;
 
-    let sender_email = configuration
-        .email_client
-        .sender()
-        .expect("Invalid sender email address.");
-    let timeout = configuration.email_client.timeout();
-    let email_client = EmailClient::new(
-        configuration.email_client.base_url,
-        sender_email,
-        configuration.email_client.authorization_token,
-        timeout,
-    );
-
-    // Get the port number
-    let address = format!(
-        "{}:{}",
-        configuration.application.host, configuration.application.port
-    );
-
-    // Here we propagate the error rather and not panic
-    let listener = TcpListener::bind(address)?;
-    run(listener, connection_pool, email_client)?.await
+    // Start the server
+    application.run_until_stopped().await?;
+    Ok(())
 }

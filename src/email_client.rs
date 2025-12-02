@@ -2,20 +2,20 @@ use std::time::Duration;
 
 use crate::domain::SubscriberEmail;
 use reqwest::Client;
-use secrecy::{ExposeSecret, SecretBox};
+use secrecy::{ExposeSecret, SecretString};
 
 pub struct EmailClient {
     http_client: Client,
     base_url: String,
     sender: SubscriberEmail,
-    authorization_token: SecretBox<String>,
+    authorization_token: SecretString,
 }
 
 impl EmailClient {
     pub fn new(
         base_url: String,
         sender: SubscriberEmail,
-        authorization_token: SecretBox<String>,
+        authorization_token: SecretString,
         timeout: Duration,
     ) -> Self {
         let http_client = Client::builder().timeout(timeout).build().unwrap();
@@ -79,7 +79,7 @@ mod tests {
     use fake::faker::internet::en::SafeEmail;
     use fake::faker::lorem::en::{Paragraph, Sentence};
     use fake::{Fake, Faker};
-    use secrecy::SecretBox;
+    use secrecy::SecretString;
     use wiremock::matchers::{any, header, header_exists, method, path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -126,7 +126,12 @@ mod tests {
     /// Get a test instance of EmailClient
     fn email_client(base_url: String) -> EmailClient {
         let timeout = Duration::from_millis(200);
-        EmailClient::new(base_url, email(), SecretBox::new(Faker.fake()), timeout)
+        EmailClient::new(
+            base_url,
+            email(),
+            SecretString::from(Faker.fake::<String>()),
+            timeout,
+        )
     }
 
     #[tokio::test]

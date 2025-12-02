@@ -1,42 +1,42 @@
 use std::time::Duration;
 
 use crate::domain::SubscriberEmail;
-use secrecy::{ExposeSecret, SecretBox};
+use secrecy::{ExposeSecret, SecretString};
 use serde_aux::field_attributes::deserialize_number_from_string;
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 use sqlx::ConnectOptions;
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Clone)]
 pub struct Settings {
     pub application: ApplicationSettings,
     pub database: DatabaseSettings,
     pub email_client: EmailClientSettings,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Clone)]
 pub struct ApplicationSettings {
     #[serde(deserialize_with = "deserialize_number_from_string")]
     pub port: u16,
     pub host: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Clone)]
 pub struct DatabaseSettings {
     #[serde(deserialize_with = "deserialize_number_from_string")]
     pub port: u16,
     pub username: String,
-    pub password: SecretBox<String>,
+    pub password: SecretString,
     pub host: String,
     pub database_name: String,
     pub require_ssl: bool,
-    pub connection_string: Option<SecretBox<String>>,
+    pub connection_string: Option<SecretString>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Clone)]
 pub struct EmailClientSettings {
     pub base_url: String,
     pub sender_email: String,
-    pub authorization_token: SecretBox<String>,
+    pub authorization_token: SecretString,
     pub timeout_milliseconds: u64,
 }
 
@@ -54,10 +54,12 @@ impl DatabaseSettings {
     pub fn without_db(&self) -> PgConnectOptions {
         // If a connection_string is provided, use it directly
         if let Some(conn_str) = &self.connection_string {
-            return conn_str
-                .expose_secret()
-                .parse::<PgConnectOptions>()
-                .expect("Failed to parse connection string into PgConnectOptions");
+            let conn_str_secret = conn_str.expose_secret();
+            if !conn_str_secret.is_empty() {
+                return conn_str_secret
+                    .parse::<PgConnectOptions>()
+                    .expect("Failed to parse connection string into PgConnectOptions");
+            }
         }
 
         // Otherwise, build the connection options from individual settings
@@ -78,12 +80,14 @@ impl DatabaseSettings {
     pub fn with_db(&self) -> PgConnectOptions {
         // If a connection_string is provided, use it directly
         if let Some(conn_str) = &self.connection_string {
-            let mut options = conn_str
-                .expose_secret()
-                .parse::<PgConnectOptions>()
-                .expect("Failed to parse connection string into PgConnectOptions");
-            options = options.log_statements(tracing::log::LevelFilter::Trace);
-            return options;
+            let connection_str = conn_str.expose_secret();
+            if !connection_str.is_empty() {
+                let mut options = connection_str
+                    .parse::<PgConnectOptions>()
+                    .expect("Failed to parse connection string into PgConnectOptions");
+                options = options.log_statements(tracing::log::LevelFilter::Trace);
+                return options;
+            }
         }
 
         // Otherwise, build the connection options from individual settings

@@ -1,6 +1,6 @@
 use crate::configuration::{DatabaseSettings, Settings};
 use crate::email_client::EmailClient;
-use crate::routes::{health_check, subscribe};
+use crate::routes::{confirm, health_check, subscribe};
 use actix_web::dev::Server;
 use actix_web::{web, App, HttpServer};
 use sqlx::PgPool;
@@ -53,7 +53,12 @@ impl Application {
         );
         let listener = TcpListener::bind(address)?;
         let port = listener.local_addr()?.port();
-        let server = run(listener, connection_pool, email_client)?;
+        let server = run(
+            listener,
+            connection_pool,
+            email_client,
+            configuration.application.base_url,
+        )?;
 
         // We save the port number and server instance for later use
         Ok(Self { port, server })
@@ -70,17 +75,25 @@ impl Application {
     }
 }
 
+// Define a wrapper type in order to retrieve the base URL in the handlers
+// using actix-web's dependency injection system
+// Retrieving a String directly would work, but it will expose us to potential conflicts.
+// By defining a new type, we ensure that there are no conflicts with other String dependencies.
+pub struct ApplicationBaseUrl(pub String);
+
 pub fn run(
     listener: TcpListener,
     db_pool: PgPool,
     email_client: EmailClient,
+    base_url: String,
 ) -> Result<Server, std::io::Error> {
-    // web::Data is a smart pointer Arc<T> around the PgConnection that makes it possible to share
-    // the connection across different workers of the application server.
+    // web::Data is a smart pointer Arc<T> around a type T that allows sharing
+    // state across different handlers in a thread-safe way.
     // With this, we have a cheap clone of the pointer instead of cloning the whole connection,
     // and only one connection is created for the whole application.
     let db_pool = web::Data::new(db_pool);
     let email_client = web::Data::new(email_client);
+    let base_url = web::Data::new(ApplicationBaseUrl(base_url));
 
     // Beware: app instance is created for each worker thread -  the cost of a string allocation (or a pointer clone) is negligible compared to the cost of handling a request - so it's ok to clone the db_pool here
     let server = HttpServer::new(move || {
@@ -88,8 +101,10 @@ pub fn run(
             .wrap(TracingLogger::default())
             .route("/health_check", web::get().to(health_check))
             .route("/subscriptions", web::post().to(subscribe))
+            .route("/subscriptions/confirm", web::get().to(confirm))
             .app_data(db_pool.clone()) // Register the DB connection as part of the application state: stateful remember of the DB connection
-            .app_data(email_client.clone())
+            .app_data(email_client.clone()) // Register the email client as part of the application state
+            .app_data(base_url.clone())
     })
     .listen(listener)?
     .run();

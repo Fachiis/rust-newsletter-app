@@ -22,7 +22,15 @@ static TRACING: Lazy<()> = Lazy::new(|| {
 
 pub struct TestApp {
     pub address: String,
+    pub port: u16,
     pub db_pool: PgPool,
+    pub email_server: wiremock::MockServer,
+}
+
+/// Links embedded in the confirmation email
+pub struct ConfirmationLinks {
+    pub html: reqwest::Url,
+    pub plain_text: reqwest::Url,
 }
 
 impl TestApp {
@@ -34,6 +42,33 @@ impl TestApp {
             .send()
             .await
             .expect("Failed to execute request.")
+    }
+
+    pub async fn get_confirmation_links(
+        &self,
+        email_request: &wiremock::Request,
+    ) -> ConfirmationLinks {
+        let body: serde_json::Value = serde_json::from_slice(&email_request.body).unwrap();
+
+        let get_link = |s: &str| {
+            let links: Vec<_> = linkify::LinkFinder::new()
+                .links(s)
+                .filter(|l| *l.kind() == linkify::LinkKind::Url)
+                .collect();
+            assert_eq!(links.len(), 1);
+            let raw_link = links[0].as_str().to_owned();
+            let mut confirmation_link = reqwest::Url::parse(&raw_link).unwrap();
+            assert_eq!(confirmation_link.host_str().unwrap(), "127.0.0.1");
+            confirmation_link
+                .set_port(Some(self.port))
+                .expect("Failed to set port");
+            confirmation_link
+        };
+
+        ConfirmationLinks {
+            html: get_link(body["HtmlBody"].as_str().unwrap()),
+            plain_text: get_link(body["TextBody"].as_str().unwrap()),
+        }
     }
 }
 
@@ -78,6 +113,8 @@ pub async fn spawn_app() -> TestApp {
     // All other invocations will instead skip execution.
     Lazy::force(&TRACING);
 
+    let email_server = wiremock::MockServer::start().await;
+
     // Randomize the database name to avoid conflicts.
     let configuration = {
         let mut c = get_configuration().expect("Failed to read configuration.");
@@ -85,6 +122,8 @@ pub async fn spawn_app() -> TestApp {
         c.database.database_name = Uuid::new_v4().to_string();
         // Use a random OS port
         c.application.port = 0;
+        // Point email client to the mock server
+        c.email_client.base_url = email_server.uri();
         c
     };
 
@@ -94,12 +133,13 @@ pub async fn spawn_app() -> TestApp {
     let application = Application::build(configuration.clone())
         .await
         .expect("Failed to build application");
-    // Get the address before spawning the application
-    let address = format!("http://127.0.0.1:{}", application.port());
+    let application_port = application.port();
     let _ = tokio::spawn(application.run_until_stopped());
 
     TestApp {
-        address,
+        address: format!("http://127.0.0.1:{}", application_port),
+        port: application_port,
         db_pool: get_connection_pool(&configuration.database).await,
+        email_server,
     }
 }

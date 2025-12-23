@@ -35,6 +35,7 @@ serde-aux = "4" # For auxiliary serde functionality, like deserializing number f
 unicode-segmentation = "1" # For handling Unicode string segmentation
 validator = "0.20" # For validating input data
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] } # For making HTTP requests in tests
+rand = { version = "0.8", features = ["std_rng"] } # For generating random values
 
 [dependencies.sqlx]
 version = "0.8.6"
@@ -58,3 +59,4 @@ quickcheck_macros = "0.9.1" # For using macros with quickcheck
 tokio = { version = "1", features = ["rt", "macros"]}
 wiremock = "0.5"# For mocking HTTP requests in tests
 serde_json = "1" # For working with JSON data in tests
+linkify = "0.8"

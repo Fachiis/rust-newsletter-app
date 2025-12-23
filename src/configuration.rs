@@ -18,6 +18,7 @@ pub struct ApplicationSettings {
     #[serde(deserialize_with = "deserialize_number_from_string")]
     pub port: u16,
     pub host: String,
+    pub base_url: String,
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -125,6 +126,20 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
                 .list_separator(",")
                 .with_list_parse_key("application.host"),
         );
+
+    // Read the BASE_URL from environment variable if set
+    let settings = if let Ok(base_url) = std::env::var("BASE_URL") {
+        println!(
+            "Overriding base_url with BASE_URL environment variable. {}",
+            &base_url
+        );
+        settings.add_source(config::File::from_str(
+            &format!("application.base_url = \"{}\"", base_url),
+            config::FileFormat::Toml,
+        ))
+    } else {
+        settings
+    };
 
     // Build and deserialize the merged configuration
     let settings = settings.build()?;

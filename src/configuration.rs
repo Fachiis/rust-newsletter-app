@@ -141,6 +141,19 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
         settings
     };
 
+    let settings = if let Ok(auth_token) = std::env::var("AUTHORIZATION_TOKEN") {
+        println!(
+            "Overriding authorization_token with AUTHORIZATION_TOKEN environment variable. {}",
+            &auth_token
+        );
+        settings.add_source(config::File::from_str(
+            &format!("email_client.authorization_token = \"{}\"", auth_token),
+            config::FileFormat::Toml,
+        ))
+    } else {
+        settings
+    };
+
     // Build and deserialize the merged configuration
     let settings = settings.build()?;
     settings.try_deserialize::<Settings>()

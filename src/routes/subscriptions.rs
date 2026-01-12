@@ -3,11 +3,13 @@ use crate::{
     domain::{NewSubscriber, SubscriberEmail, SubscriberName},
     email_client::EmailClient,
 };
-use actix_web::{web, HttpResponse};
+use actix_web::http::StatusCode;
+use actix_web::{web, HttpResponse, ResponseError};
 use chrono::Utc;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use sqlx::PgPool;
+use std::error::Error;
 use uuid::Uuid;
 
 // Defining the structure of the expected form data,
@@ -28,6 +30,99 @@ impl TryFrom<FormData> for NewSubscriber {
     }
 }
 
+/// Generate a random 25-character-long alphanumeric case-sensitive subscription token
+fn generate_subscription_token() -> String {
+    let mut rng = thread_rng();
+    std::iter::repeat_with(|| rng.sample(Alphanumeric))
+        .map(char::from)
+        .take(25)
+        .collect()
+}
+// Explanation:
+// repeat_with: creates an iterator that repeatedly calls the provided closure to generate values
+// map: transforms each sampled value into a char
+// take: takes the first 25 characters from the iterator
+// collect: collects the characters into a String
+
+// Derive Debug for easier error handling.
+// But we cannot derive Display because sqlx::Error does not implement Display
+pub struct StoreTokenError(sqlx::Error);
+
+impl Error for StoreTokenError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+impl std::fmt::Debug for StoreTokenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        error_chain_fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for StoreTokenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "A database error occurred while trying to store a subscription token.",
+        )
+    }
+}
+
+/// Using "source" we can write a function that provides a similar representation for any type that implements Error
+fn error_chain_fmt(e: &impl Error, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}\n", e).expect("Failed to write error");
+    let mut current = e.source();
+    println!("Current error: {:?}", current);
+    while let Some(cause) = current {
+        write!(f, "Caused by:\n\t {}", cause).expect("Failed to write error");
+        current = cause.source();
+    }
+    Ok(())
+}
+
+// Key important things to note:
+// The procedural macro #[derive(thiserror::Error)] generates a custom error type
+// The #[error] defines the Display representation of the error. You can use placeholders like {0} to refer to fields.
+// #[source] used to denote what should be returned as root cause in Error::source.
+// #[from] used to automatically implement `From` for the error type.
+#[derive(thiserror::Error)]
+pub enum SubscribeError {
+    #[error("{0}")]
+    ValidationError(String),
+    #[error("Failed to acquire a postgres connection from the pool.")]
+    PoolError(#[source] sqlx::Error),
+    #[error("Failed to insert a new subscriber in the database.")]
+    InsertSubscriberError(#[source] sqlx::Error),
+    #[error("Failed to commit SQL transaction to store a new subscriber.")]
+    TransactionError(#[source] sqlx::Error),
+    #[error("Failed to store the confirmation token for a new subscriber.")]
+    StoreTokenError(#[from] StoreTokenError),
+    #[error("Failed to send a confirmation email.")]
+    SendEmailError(#[from] reqwest::Error),
+}
+
+// Still using the custom bespoke implementation for Debug
+// to get nice report using the error source chain
+impl std::fmt::Debug for SubscribeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        error_chain_fmt(self, f)
+    }
+}
+
+impl ResponseError for SubscribeError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            SubscribeError::ValidationError(_) => StatusCode::BAD_REQUEST,
+            SubscribeError::PoolError(_)
+            | SubscribeError::InsertSubscriberError(_)
+            | SubscribeError::TransactionError(_)
+            | SubscribeError::StoreTokenError(_)
+            | SubscribeError::SendEmailError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
 // tracing instrumentation macro to automatically create and enter spans for us
 // name: name of the span
 // skip: variables to skip recording in the span
@@ -45,50 +140,39 @@ pub async fn subscribe(
     pool: web::Data<PgPool>,
     email_client: web::Data<EmailClient>,
     base_url: web::Data<ApplicationBaseUrl>,
-) -> HttpResponse {
+) -> Result<HttpResponse, SubscribeError> {
     // Why we are using form.0 instead of form.name?
     // Because form is a smart pointer (web::Form) that wraps the actual data (FormData)
-    let new_subscriber = match form.0.try_into() {
-        Ok(subscriber) => subscriber,
-        Err(_) => return HttpResponse::BadRequest().finish(),
-    };
+    let new_subscriber = form.0.try_into().map_err(SubscribeError::ValidationError)?;
 
-    let mut transaction = match pool.begin().await {
-        Ok(transaction) => transaction,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
-    };
+    // Begin a database transaction
+    let mut transaction = pool.begin().await.map_err(SubscribeError::PoolError)?;
 
-    let subscriber_id = match insert_subscriber(&mut transaction, &new_subscriber).await {
-        Ok(subscriber_id) => subscriber_id,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
-    };
-    let subscription_token = generate_subscription_token();
-    if store_token(&mut transaction, subscriber_id, &subscription_token)
+    let subscriber_id = insert_subscriber(&mut transaction, &new_subscriber)
         .await
-        .is_err()
-    {
-        return HttpResponse::InternalServerError().finish();
-    }
+        .map_err(SubscribeError::InsertSubscriberError)?;
+    let subscription_token = generate_subscription_token();
+    store_token(&mut transaction, subscriber_id, &subscription_token)
+        .await
+        .map_err(SubscribeError::StoreTokenError)?;
 
     // Commit the transaction else it will be rolled back automatically when dropped
-    if transaction.commit().await.is_err() {
-        return HttpResponse::InternalServerError().finish();
-    }
+    transaction
+        .commit()
+        .await
+        .map_err(SubscribeError::TransactionError)?;
 
-    if send_confirmation_email(
+    // Send the confirmation email
+    send_confirmation_email(
         &email_client,
         new_subscriber,
         &base_url.0,
         &subscription_token,
     )
     .await
-    .is_err()
-    {
-        tracing::error!("Failed to send welcome email");
-        return HttpResponse::InternalServerError().finish();
-    }
+    .map_err(SubscribeError::SendEmailError)?;
 
-    HttpResponse::Ok().finish()
+    Ok(HttpResponse::Ok().finish())
 }
 
 // Separation of concerns: database interaction logic is separated from request handling logic
@@ -128,7 +212,7 @@ pub async fn store_token(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     subscriber_id: Uuid,
     subscription_token: &str,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), StoreTokenError> {
     sqlx::query!(
         r#"INSERT INTO subscription_tokens (subscription_token, subscriber_id)
         VALUES ($1, $2)
@@ -139,8 +223,9 @@ pub async fn store_token(
     .execute(transaction.as_mut())
     .await
     .map_err(|e| {
+        // If an error occurs, we grab the error and emit a log event
         tracing::error!("Failed to execute query: {:?}", e);
-        e
+        StoreTokenError(e)
     })?;
     Ok(())
 }
@@ -175,17 +260,3 @@ pub async fn send_confirmation_email(
         .send_email(new_subscriber.email, "Welcome!", &html_body, &plain_body)
         .await
 }
-
-/// Generate a random 25-character-long alphanumeric case-sensitive subscription token
-fn generate_subscription_token() -> String {
-    let mut rng = thread_rng();
-    std::iter::repeat_with(|| rng.sample(Alphanumeric))
-        .map(char::from)
-        .take(25)
-        .collect()
-}
-// Explanation:
-// repeat_with: creates an iterator that repeatedly calls the provided closure to generate values
-// map: transforms each sampled value into a char
-// take: takes the first 25 characters from the iterator
-// collect: collects the characters into a String

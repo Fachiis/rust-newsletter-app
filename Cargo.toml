@@ -36,7 +36,8 @@ unicode-segmentation = "1" # For handling Unicode string segmentation
 validator = "0.20" # For validating input data
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] } # For making HTTP requests in tests
 rand = { version = "0.8", features = ["std_rng"] } # For generating random values
-thiserror = "2"
+thiserror = "2" # For deriving error types
+anyhow = "1" # For easy error handling
 
 [dependencies.sqlx]
 version = "0.8.6"

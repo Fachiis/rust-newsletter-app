@@ -34,11 +34,22 @@ pub struct ConfirmationLinks {
 }
 
 impl TestApp {
+    /// Send a subscription request to the application
     pub async fn post_subscriptions(&self, body: String) -> reqwest::Response {
         reqwest::Client::new()
             .post(format!("{}/subscriptions", &self.address))
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(body)
+            .send()
+            .await
+            .expect("Failed to execute request.")
+    }
+
+    /// Send a newsletter request to the application
+    pub async fn post_newsletters(&self, body: serde_json::Value) -> reqwest::Response {
+        reqwest::Client::new()
+            .post(format!("{}/newsletters", &self.address))
+            .json(&body)
             .send()
             .await
             .expect("Failed to execute request.")

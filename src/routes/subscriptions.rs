@@ -5,6 +5,7 @@ use crate::{
 };
 use actix_web::http::StatusCode;
 use actix_web::{web, HttpResponse, ResponseError};
+use anyhow::Context;
 use chrono::Utc;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
@@ -70,7 +71,7 @@ impl std::fmt::Display for StoreTokenError {
 }
 
 /// Using "source" we can write a function that provides a similar representation for any type that implements Error
-fn error_chain_fmt(e: &impl Error, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+pub fn error_chain_fmt(e: &impl Error, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     write!(f, "{}\n", e).expect("Failed to write error");
     let mut current = e.source();
     println!("Current error: {:?}", current);
@@ -90,16 +91,8 @@ fn error_chain_fmt(e: &impl Error, f: &mut std::fmt::Formatter<'_>) -> std::fmt:
 pub enum SubscribeError {
     #[error("{0}")]
     ValidationError(String),
-    #[error("Failed to acquire a postgres connection from the pool.")]
-    PoolError(#[source] sqlx::Error),
-    #[error("Failed to insert a new subscriber in the database.")]
-    InsertSubscriberError(#[source] sqlx::Error),
-    #[error("Failed to commit SQL transaction to store a new subscriber.")]
-    TransactionError(#[source] sqlx::Error),
-    #[error("Failed to store the confirmation token for a new subscriber.")]
-    StoreTokenError(#[from] StoreTokenError),
-    #[error("Failed to send a confirmation email.")]
-    SendEmailError(#[from] reqwest::Error),
+    #[error(transparent)] // transparent to delegate Display to the source error
+    UnexpectedError(#[from] anyhow::Error), // Using anyhow::Error for easy error handling
 }
 
 // Still using the custom bespoke implementation for Debug
@@ -114,11 +107,7 @@ impl ResponseError for SubscribeError {
     fn status_code(&self) -> StatusCode {
         match self {
             SubscribeError::ValidationError(_) => StatusCode::BAD_REQUEST,
-            SubscribeError::PoolError(_)
-            | SubscribeError::InsertSubscriberError(_)
-            | SubscribeError::TransactionError(_)
-            | SubscribeError::StoreTokenError(_)
-            | SubscribeError::SendEmailError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            SubscribeError::UnexpectedError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -146,21 +135,26 @@ pub async fn subscribe(
     let new_subscriber = form.0.try_into().map_err(SubscribeError::ValidationError)?;
 
     // Begin a database transaction
-    let mut transaction = pool.begin().await.map_err(SubscribeError::PoolError)?;
+    let mut transaction = pool
+        .begin()
+        .await
+        .context("Failed to acquire a Postgres connection from the poll")?; // Using anyhow::Context to add context to the error.
+                                                                            // The context method performs 1. mapping from sqlx::Error to anyhow::Error and 2. adds a custom error message.
 
     let subscriber_id = insert_subscriber(&mut transaction, &new_subscriber)
         .await
-        .map_err(SubscribeError::InsertSubscriberError)?;
+        .context("Failed to insert new subscriber in the database.")?;
+
     let subscription_token = generate_subscription_token();
     store_token(&mut transaction, subscriber_id, &subscription_token)
         .await
-        .map_err(SubscribeError::StoreTokenError)?;
+        .context("Failed to store confirmation token for a new subscriber.")?;
 
     // Commit the transaction else it will be rolled back automatically when dropped
     transaction
         .commit()
         .await
-        .map_err(SubscribeError::TransactionError)?;
+        .context("Failed to commit SQL transaction to store for a new subscriber.")?;
 
     // Send the confirmation email
     send_confirmation_email(
@@ -170,7 +164,7 @@ pub async fn subscribe(
         &subscription_token,
     )
     .await
-    .map_err(SubscribeError::SendEmailError)?;
+    .context("Failed to send a confirmation email")?;
 
     Ok(HttpResponse::Ok().finish())
 }
@@ -197,10 +191,7 @@ pub async fn insert_subscriber(
     )
     .execute(transaction.as_mut())
     .await
-    .map_err(|e| {
-        tracing::error!("Failed to execute query: {:?}", e);
-        e
-    })?; // Using "?" to return early in case of error
+    .map_err(|e| e)?; // Using "?" to return early in case of error
     Ok(subscription_id)
 }
 
@@ -222,11 +213,7 @@ pub async fn store_token(
     )
     .execute(transaction.as_mut())
     .await
-    .map_err(|e| {
-        // If an error occurs, we grab the error and emit a log event
-        tracing::error!("Failed to execute query: {:?}", e);
-        StoreTokenError(e)
-    })?;
+    .map_err(|e| StoreTokenError(e))?;
     Ok(())
 }
 

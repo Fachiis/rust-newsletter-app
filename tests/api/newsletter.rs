@@ -1,4 +1,5 @@
 use actix_web::http;
+use uuid::Uuid;
 use wiremock::{
     matchers::{any, method, path},
     Mock, ResponseTemplate,
@@ -67,10 +68,10 @@ async fn newsletter_are_not_delivered_to_unconfirmed_subscribers() {
         "html": "<p>Newsletter HTML content</p>"
     }
     });
-    let respose = app.post_newsletters(newsletter_request_body).await;
+    let response = app.post_newsletters(newsletter_request_body).await;
 
     // Assert
-    assert_eq!(respose.status().as_u16(), 200);
+    assert_eq!(response.status().as_u16(), 200);
     // Mock expectations are verified when the mock goes out of scope. This is where we verify that no email was sent.
 }
 
@@ -99,10 +100,10 @@ async fn newsletters_are_delivered_to_confirmed_subscribers() {
         "html": "<p>Newsletter HTML content</p>"
     }
     });
-    let respose = app.post_newsletters(newsletter_request_body).await;
+    let response = app.post_newsletters(newsletter_request_body).await;
 
     // Assert
-    assert_eq!(respose.status().as_u16(), 200);
+    assert_eq!(response.status().as_u16(), 200);
     // Mock expectations are verified when the mock goes out of scope. This is where we verify that an email was sent.
 }
 
@@ -141,4 +142,110 @@ async fn newsletters_return_400_for_invalid_data() {
             error_message
         );
     }
+}
+
+#[tokio::test]
+async fn requests_missing_authorization_are_rejected() {
+    // Arrange
+    let app = spawn_app().await;
+
+    let newsletter_request_body = serde_json::json!({
+        "title": "Newsletter title",
+        "content": {
+            "text": "Newsletter text content",
+            "html": "<p>Newsletter HTML content</p>"
+        }
+    });
+
+    let response = reqwest::Client::new()
+        .post(&format!("{}/newsletters", &app.address))
+        .json(&newsletter_request_body)
+        .send()
+        .await
+        .expect("Failed to execute request.");
+
+    // Assert
+    assert_eq!(401, response.status().as_u16());
+    assert_eq!(
+        r#"Basic realm="publish""#,
+        response.headers()["WWW-Authenticate"]
+    );
+}
+
+#[tokio::test]
+async fn non_existing_user_is_rejected() {
+    // Arrange
+    let start_time = std::time::Instant::now();
+
+    let app = spawn_app().await;
+    // Random credentials
+    let username = Uuid::new_v4().to_string();
+    let password = Uuid::new_v4().to_string();
+
+    let response = reqwest::Client::new()
+        .post(&format!("{}/newsletters", &app.address))
+        .basic_auth(username, Some(password))
+        .json(&serde_json::json!({
+            "title": "Newsletter title",
+            "content": {
+            "text": "Newsletter body as plain text",
+            "html": "<p>Newsletter body as HTML</p>",
+        }
+        }))
+        .send()
+        .await
+        .expect("Failed to execute request.");
+
+    // Assert
+    assert_eq!(401, response.status().as_u16());
+    assert_eq!(
+        r#"Basic realm="publish""#,
+        response.headers()["WWW-Authenticate"]
+    );
+
+    let start_ms = start_time.elapsed().as_secs();
+    println!(
+        "Test non_existing_user_is_rejected takes approximately {} ms",
+        start_ms
+    );
+}
+
+#[tokio::test]
+async fn invalid_password_is_rejected() {
+    // Arrange
+    let start_time = std::time::Instant::now();
+
+    let app = spawn_app().await;
+    let username = &app.test_user.username;
+    // Random password
+    let password = Uuid::new_v4().to_string();
+
+    assert_ne!(app.test_user.password, password);
+
+    let response = reqwest::Client::new()
+        .post(&format!("{}/newsletters", &app.address))
+        .basic_auth(username, Some(password))
+        .json(&serde_json::json!({
+            "title": "Newsletter title",
+            "content": {
+            "text": "Newsletter body as plain text",
+            "html": "<p>Newsletter body as HTML</p>",
+        }
+        }))
+        .send()
+        .await
+        .expect("Failed to execute request.");
+
+    // Assert
+    assert_eq!(401, response.status().as_u16());
+    assert_eq!(
+        r#"Basic realm="publish""#,
+        response.headers()["WWW-Authenticate"]
+    );
+
+    let start_ms = start_time.elapsed().as_secs();
+    println!(
+        "Test invalid_password_is_rejected takes approximately {} ms",
+        start_ms
+    );
 }

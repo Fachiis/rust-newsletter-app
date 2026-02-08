@@ -1,16 +1,13 @@
-use crate::telemetry::spawn_blocking_with_tracing;
+use crate::authentication::{validate_credentials, AuthError, Credentials};
 use crate::{domain::SubscriberEmail, email_client::EmailClient, routes::error_chain_fmt};
 use actix_web::body::BoxBody;
 use actix_web::http::header::{HeaderMap, HeaderValue};
 use actix_web::http::{header, StatusCode};
 use actix_web::{web, HttpRequest, HttpResponse, ResponseError};
 use anyhow::Context;
-use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use base64::{engine::general_purpose, Engine as _};
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use sqlx::PgPool;
-use tokio::task::JoinHandle;
-use uuid::Uuid;
 
 // Newsletter request body data. We derive Deserialize to parse the incoming request body. parsing is done automatically by Actix Web. (parsing means converting the raw HTTP request body into a Rust data structure)
 #[derive(serde::Deserialize)]
@@ -29,6 +26,7 @@ struct ConfirmedSubscriber {
     email: SubscriberEmail,
 }
 
+/// Get the list of confirmed subscribers from the database.
 async fn get_confirmed_subscribers(
     pool: &PgPool,
 ) -> Result<Vec<Result<ConfirmedSubscriber, anyhow::Error>>, anyhow::Error> {
@@ -68,13 +66,6 @@ impl std::fmt::Debug for PublishError {
 }
 
 impl ResponseError for PublishError {
-    // fn status_code(&self) -> reqwest::StatusCode {
-    //     match self {
-    //         PublishError::UnexpectedError(_) => http::StatusCode::INTERNAL_SERVER_ERROR,
-    //         PublishError::AuthError(_) => http::StatusCode::UNAUTHORIZED,
-    //     }
-    // }
-
     // status code is invoked by default implementation of error_response
     fn error_response(&self) -> HttpResponse<BoxBody> {
         match self {
@@ -93,15 +84,10 @@ impl ResponseError for PublishError {
     }
 }
 
-#[derive(Debug)]
-struct Credentials {
-    username: String,
-    password: SecretString,
-}
-
 /// Extracts basic authentication credentials from the request headers.
 /// Returns an error if the `Authorization` header is missing or malformed.
 fn basic_authentication(headers: &HeaderMap) -> Result<Credentials, anyhow::Error> {
+    // Get the "Authorization" header from the request headers. If it is missing, return an error with context.
     println!("headers: {:?}", headers);
     let header_value = headers
         .get("Authorization")
@@ -109,96 +95,37 @@ fn basic_authentication(headers: &HeaderMap) -> Result<Credentials, anyhow::Erro
         .to_str()
         .context("The 'Authorization' header was not a valid UTF-8 string")?;
 
+    // The "Authorization" header is expected to be in the format "Basic <base64encoded_credentials>"
     let base64encoded_segment = header_value
         .strip_prefix("Basic ") // Remove the "Basic " prefix
-        .context("The 'Authorization' header is not a Basic authentication")?; // Extract the base64 encoded part which is usually after "Basic <encoded_string>"
+        .context("The 'Authorization' header is not a Basic authentication")?; // ? If the prefix is not present, return an error with context
+
+    // The remaining part is the base64 encoded credentials. We need to decode it to get the username and password.
     let decoded_bytes = general_purpose::STANDARD
         .decode(base64encoded_segment)
-        .context("Failed to decode the 'Authorization' header")?; // Decode the base64 encoded string which results in vector of bytes
+        .context("Failed to decode the 'Authorization' header")?;
+
+    // The decoded bytes should be in the format "username:password". We need to convert it into a string and then split it to get the username and password.
     let decoded_credentials = String::from_utf8(decoded_bytes)
         .context("The decoded 'Authorization' header is not a valid UTF-8 string")?;
-    // Convert the decoded bytes into a UTF-8 string which is usually in the format "username:password"
 
-    let mut credentials = decoded_credentials.splitn(2, ':'); // Split the string into username and password using ':' as the delimiter
+    // Split the decoded credentials into username and password. We use splitn to split the string into at most 2 parts, so that we can handle cases where the password contains ':' character.
+    let mut credentials = decoded_credentials.splitn(2, ':');
+
+    // Extract the username and password from the split credentials. If either of them is missing, return an error with context.
     let username = credentials
         .next()
         .ok_or_else(|| anyhow::anyhow!("A username must be provided in 'Basic' auth."))?
-        .to_string(); // Extract the username part
+        .to_string();
     let password = credentials
         .next()
         .ok_or_else(|| anyhow::anyhow!("A password must be provided in 'Basic' auth."))?
-        .to_string(); // Extract the password part
+        .to_string();
 
     Ok(Credentials {
         username,
         password: SecretString::new(Box::from(password)),
     })
-}
-
-#[tracing::instrument(name = "Validate credentials", skip(pool, credentials))]
-async fn validate_credentials(
-    credentials: Credentials,
-    pool: &PgPool,
-) -> Result<Uuid, PublishError> {
-    let (user_id, expected_password_hash) = get_stored_credentials(&credentials.username, pool)
-        .await
-        .map_err(PublishError::UnexpectedError)?
-        .ok_or_else(|| PublishError::AuthError(anyhow::anyhow!("Unknown username.")))?;
-
-    // Verify the password using Argon2
-    // Note that we do not need to provide the salt and other parameters because they are already embedded in the PHC string format.
-    // Therefore, the parsing we did above extracts all the necessary information for verification.
-    // This roughly takes about 288ms which is 0.288 seconds to compute and verify the hash. This could lead to blocking problem if we have many concurrent requests. Possible solutions are to offload the computation to a separate thread pool (which we have done) or use a faster hashing algorithm.
-    // The current span is needed if we need to trace our execution flow.
-    spawn_blocking_with_tracing(|| {
-        verify_password_hash(expected_password_hash, credentials.password)
-    })
-    .await
-    .context("Failed to join password verification task.") // Meaning; we failed to wait for the spawned blocking task to finish
-    .map_err(PublishError::UnexpectedError)??; // The double ?? is because the first one is for the JoinError and the second one is for the Result returned by verify_password_hash
-
-    Ok(user_id)
-}
-
-#[tracing::instrument(
-    name = "Verify password hash",
-    skip(expected_password_hash, password_candidate)
-)]
-fn verify_password_hash(
-    expected_password_hash: SecretString,
-    password_candidate: SecretString,
-) -> Result<(), PublishError> {
-    let expected_password_hash = PasswordHash::new(expected_password_hash.expose_secret())
-        .context("Failed to parse the stored password hash to the PHC string format.")
-        .map_err(PublishError::UnexpectedError)?; // Basically converting the expected password hash string into PasswordHash struct
-
-    Argon2::default()
-        .verify_password(
-            password_candidate.expose_secret().as_bytes(),
-            &expected_password_hash,
-        )
-        .context("Invalid password.")
-        .map_err(PublishError::AuthError) // This now compares the password candidate with the expected password hash
-}
-
-async fn get_stored_credentials(
-    username: &str,
-    pool: &PgPool,
-) -> Result<Option<(Uuid, SecretString)>, anyhow::Error> {
-    let row = sqlx::query!(
-        r#"
-	SELECT user_id, password_hash
-	FROM users
-	WHERE username = $1
-	"#,
-        username,
-    )
-    .fetch_optional(pool)
-    .await
-    .context("Failed to perform a query to retrieve stored credentials.")?
-    .map(|row| (row.user_id, SecretString::new(row.password_hash.into())));
-
-    Ok(row)
 }
 
 // We will now use an extractor to parse the incoming request body into our BodyData struct
@@ -217,14 +144,21 @@ pub async fn publish_newsletter(
     email_client: web::Data<EmailClient>,
     request: HttpRequest,
 ) -> Result<HttpResponse, PublishError> {
+    // Extract the credentials from the "Authorization" header. If the header is missing or malformed, return an error with context.
     let credentials =
         basic_authentication(request.headers()).map_err(|e| PublishError::AuthError(e))?;
     tracing::Span::current().record("username", &tracing::field::display(&credentials.username)); // Record the username in the tracing span
 
-    let user_id = validate_credentials(credentials, &pool).await?;
-    println!("user_id: {:?}", user_id);
+    // Validate the credentials against the database. If the credentials are invalid, return an error with context.
+    let user_id = validate_credentials(credentials, &pool)
+        .await
+        .map_err(|e| match e {
+            AuthError::InvalidCredentials(_) => PublishError::AuthError(e.into()), // Convert the error into PublishError::AuthError
+            AuthError::UnexpectedError(_) => PublishError::UnexpectedError(e.into()),
+        })?;
     tracing::Span::current().record("user_id", &tracing::field::display(&user_id)); // Record the user_id in the tracing span
 
+    // Get the list of confirmed subscribers from the database. If there is an error during the query, return an error with context.
     let subscribers = get_confirmed_subscribers(&pool).await?;
 
     for subscriber in subscribers {

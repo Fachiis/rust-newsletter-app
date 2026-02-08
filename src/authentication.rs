@@ -21,42 +21,6 @@ pub enum AuthError {
     UnexpectedError(#[from] anyhow::Error),
 }
 
-#[tracing::instrument(name = "Validate credentials", skip(pool, credentials))]
-pub async fn validate_credentials(
-    credentials: Credentials,
-    pool: &PgPool,
-) -> Result<Uuid, AuthError> {
-    let mut user_id = None;
-    let mut expected_password_hash = SecretString::new(Box::from(
-        "$argon2id$v=19$m=15000,t=2,p=1$\
-gZiV/M1gPc22ElAH/Jh1Hw$\
-CWOrkoo7oJBQ/iyh7uJ0LO2aLEfrHwTWllSAxT0zRno"
-            .to_string(),
-    ));
-
-    // Get the stored credentials for the g`iven username from the database.
-    if let Some((stored_user_id, stored_password_hash)) =
-        get_stored_credentials(&credentials.username, pool).await?
-    {
-        user_id = Some(stored_user_id);
-        expected_password_hash = stored_password_hash;
-    }
-
-    // Verify the password using Argon2
-    // Note that we do not need to provide the salt and other parameters because they are already embedded in the PHC string format.
-    // Therefore, the parsing we did above extracts all the necessary information for verification.
-    // This roughly takes about 288ms which is 0.288 seconds to compute and verify the hash. This could lead to blocking problem if we have many concurrent requests. Possible solutions are to offload the computation to a separate thread pool (which we have done) or use a faster hashing algorithm.
-    // The current span is needed if we need to trace our execution flow.
-    spawn_blocking_with_tracing(|| {
-        verify_password_hash(expected_password_hash, credentials.password)
-    })
-    .await
-    .context("Failed to spawn blocking task")??; // Meaning; we failed to wait for the spawned blocking task to finish
-                                                 // The double ?? is because the first one is for the JoinError and the second one is for the Result returned by verify_password_hash
-
-    user_id.ok_or_else(|| AuthError::InvalidCredentials(anyhow::anyhow!("Unknown username.")))
-}
-
 /// Verifies the password hash using Argon2. Returns Ok(()) if the password is correct, otherwise returns an error with context.
 #[tracing::instrument(
     name = "Verify password hash",
@@ -101,4 +65,40 @@ pub async fn get_stored_credentials(
     .map(|row| (row.user_id, SecretString::new(row.password_hash.into())));
 
     Ok(row)
+}
+
+#[tracing::instrument(name = "Validate credentials", skip(pool, credentials))]
+pub async fn validate_credentials(
+    credentials: Credentials,
+    pool: &PgPool,
+) -> Result<Uuid, AuthError> {
+    let mut user_id = None;
+    let mut expected_password_hash = SecretString::new(Box::from(
+        "$argon2id$v=19$m=15000,t=2,p=1$\
+gZiV/M1gPc22ElAH/Jh1Hw$\
+CWOrkoo7oJBQ/iyh7uJ0LO2aLEfrHwTWllSAxT0zRno"
+            .to_string(),
+    ));
+
+    // Get the stored credentials for the g`iven username from the database.
+    if let Some((stored_user_id, stored_password_hash)) =
+        get_stored_credentials(&credentials.username, pool).await?
+    {
+        user_id = Some(stored_user_id);
+        expected_password_hash = stored_password_hash;
+    }
+
+    // Verify the password using Argon2
+    // Note that we do not need to provide the salt and other parameters because they are already embedded in the PHC string format.
+    // Therefore, the parsing we did above extracts all the necessary information for verification.
+    // This roughly takes about 288ms which is 0.288 seconds to compute and verify the hash. This could lead to blocking problem if we have many concurrent requests. Possible solutions are to offload the computation to a separate thread pool (which we have done) or use a faster hashing algorithm.
+    // The current span is needed if we need to trace our execution flow.
+    spawn_blocking_with_tracing(|| {
+        verify_password_hash(expected_password_hash, credentials.password)
+    })
+    .await
+    .context("Failed to spawn blocking task")??; // Meaning; we failed to wait for the spawned blocking task to finish
+                                                 // The double ?? is because the first one is for the JoinError and the second one is for the Result returned by verify_password_hash
+
+    user_id.ok_or_else(|| AuthError::InvalidCredentials(anyhow::anyhow!("Unknown username.")))
 }

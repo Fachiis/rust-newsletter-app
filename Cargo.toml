@@ -40,6 +40,7 @@ thiserror = "2" # For deriving error types
 anyhow = "1" # For easy error handling
 base64 = "0.22.1" # For base64 encoding and decoding
 argon2 = { version = "0.5.3", features = ["std"] } # For Argon2 password hashing
+urlencoding = "2" # For URL encoding and decoding
 
 [dependencies.sqlx]
 version = "0.8.6"

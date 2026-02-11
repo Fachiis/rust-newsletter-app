@@ -9,7 +9,10 @@ pub async fn login_form(query: web::Query<QueryParameters>) -> HttpResponse {
     let error_html = match query.0.error {
         None => "".into(),
         Some(error_message) => {
-            format!("<p><i><b><font color=\"red\">{error_message}</font></b></i></p>",)
+            format!(
+                "<p><i><b><font color=\"red\">{}</font></b></i></p>",
+                htmlescape::encode_minimal(&error_message) // HTML escape the error message  to prevent XSS attacks
+            )
         }
     };
     HttpResponse::Ok()

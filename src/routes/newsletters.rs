@@ -147,7 +147,7 @@ pub async fn publish_newsletter(
     // Extract the credentials from the "Authorization" header. If the header is missing or malformed, return an error with context.
     let credentials =
         basic_authentication(request.headers()).map_err(|e| PublishError::AuthError(e))?;
-    tracing::Span::current().record("username", &tracing::field::display(&credentials.username)); // Record the username in the tracing span
+    tracing::Span::current().record("username", tracing::field::display(&credentials.username)); // Record the username in the tracing span
 
     // Validate the credentials against the database. If the credentials are invalid, return an error with context.
     let user_id = validate_credentials(credentials, &pool)
@@ -156,7 +156,7 @@ pub async fn publish_newsletter(
             AuthError::InvalidCredentials(_) => PublishError::AuthError(e.into()), // Convert the error into PublishError::AuthError
             AuthError::UnexpectedError(_) => PublishError::UnexpectedError(e.into()),
         })?;
-    tracing::Span::current().record("user_id", &tracing::field::display(&user_id)); // Record the user_id in the tracing span
+    tracing::Span::current().record("user_id", tracing::field::display(&user_id)); // Record the user_id in the tracing span
 
     // Get the list of confirmed subscribers from the database. If there is an error during the query, return an error with context.
     let subscribers = get_confirmed_subscribers(&pool).await?;

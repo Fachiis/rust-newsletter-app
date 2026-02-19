@@ -1,8 +1,9 @@
 use std::fmt::Debug;
 
+use actix_web::cookie::Cookie;
+use actix_web::error::InternalError;
 use actix_web::http::header::LOCATION;
-use actix_web::http::StatusCode;
-use actix_web::{web, HttpResponse, ResponseError};
+use actix_web::{web, HttpResponse};
 use secrecy::SecretString;
 use sqlx::PgPool;
 
@@ -23,7 +24,7 @@ pub struct FormData {
 pub async fn login(
     form: web::Form<FormData>,
     pool: web::Data<PgPool>,
-) -> Result<HttpResponse, LoginError> {
+) -> Result<HttpResponse, InternalError<LoginError>> {
     // Converting the form data into our Credentials struct. We can directly use the form data to create the Credentials struct since they have the same fields. This is more concise and avoids unnecessary cloning of the data. If we were to clone the data, it would involve creating new instances of the username and password, which is unnecessary since we can directly use the data from the form. By using form.0, we can access the inner FormData struct directly and create the Credentials struct without any additional overhead.
 
     // let credentials = Credentials {
@@ -38,19 +39,27 @@ pub async fn login(
 
     tracing::Span::current().record("username", tracing::field::display(&credentials.username)); // Record the username in the tracing span
 
-    // Validate the credentials and retrieve the user ID. If the credentials are invalid, return an authentication error. If there is an unexpected error during validation, return an unexpected error.
-    let user_id = validate_credentials(credentials, &pool)
-        .await
-        .map_err(|e| match e {
-            AuthError::InvalidCredentials(_) => LoginError::AuthError(e.into()), // Convert the error into LoginError::AuthError
-            AuthError::UnexpectedError(_) => LoginError::UnexpectedError(e.into()),
-        })?;
+    // Validate and authenticate the user credentials
+    match validate_credentials(credentials, &pool).await {
+        Ok(user_id) => {
+            tracing::Span::current().record("user_id", tracing::field::display(&user_id));
+            Ok(HttpResponse::SeeOther()
+                .insert_header((LOCATION, "/"))
+                .finish())
+        }
+        Err(e) => {
+            let e = match e {
+                AuthError::InvalidCredentials(_) => LoginError::AuthError(e.into()),
+                AuthError::UnexpectedError(_) => LoginError::UnexpectedError(e.into()),
+            }; // Convert the AuthError into LoginError
 
-    tracing::Span::current().record("user_id", tracing::field::display(&user_id)); // Record the user ID in the tracing span
-
-    Ok(HttpResponse::SeeOther()
-        .insert_header((LOCATION, "/"))
-        .finish())
+            let response = HttpResponse::SeeOther()
+                .insert_header((LOCATION, "/login"))
+                .cookie(Cookie::new("_flash", e.to_string()))
+                .finish();
+            Err(InternalError::from_response(e, response))
+        }
+    }
 }
 
 #[derive(thiserror::Error)]
@@ -68,21 +77,5 @@ pub enum LoginError {
 impl Debug for LoginError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         error_chain_fmt(self, f)
-    }
-}
-
-// Implementing the ResponseError trait for LoginError to convert our custom error type into an HTTP response. This allows us to return appropriate HTTP status codes based on the type of error that occurred during the login process. For example, if there was an authentication error, we can return a 401 Unauthorized status code, while for unexpected errors, we can return a 500 Internal Server Error status code. This helps to provide meaningful feedback to the client about the nature of the error that occurred.
-impl ResponseError for LoginError {
-    // The status code for the response is determined based on the type of error. In this case, we return a 303 See Other status code for both authentication errors and unexpected errors, which indicates that the client should redirect to the login page. This allows us to handle both types of errors in a consistent way and provide a better user experience by redirecting the user back to the login page when an error occurs.
-    fn status_code(&self) -> StatusCode {
-        StatusCode::SEE_OTHER
-    }
-
-    fn error_response(&self) -> HttpResponse {
-        let encoded_error = urlencoding::Encoded::new(self.to_string());
-
-        HttpResponse::build(self.status_code())
-            .insert_header((LOCATION, format!("/login?error={}", encoded_error)))
-            .finish()
     }
 }

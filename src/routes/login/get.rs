@@ -1,17 +1,12 @@
-use actix_web::{http::header::ContentType, web, HttpResponse};
+use actix_web::{http::header::ContentType, HttpRequest, HttpResponse};
 
-#[derive(serde::Deserialize)]
-pub struct QueryParameters {
-    error: Option<String>,
-}
-
-pub async fn login_form(query: web::Query<QueryParameters>) -> HttpResponse {
-    let error_html = match query.0.error {
+pub async fn login_form(request: HttpRequest) -> HttpResponse {
+    let error_html: String = match request.cookie("_flash") {
         None => "".into(),
-        Some(error_message) => {
+        Some(cookie) => {
             format!(
                 "<p><i><b><font color=\"red\">{}</font></b></i></p>",
-                htmlescape::encode_minimal(&error_message) // HTML escape the error message  to prevent XSS attacks
+                cookie.value()
             )
         }
     };

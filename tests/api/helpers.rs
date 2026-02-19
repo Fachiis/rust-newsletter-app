@@ -66,6 +66,7 @@ pub struct TestApp {
     pub db_pool: PgPool,
     pub email_server: wiremock::MockServer,
     pub test_user: TestUser,
+    pub api_client: reqwest::Client,
 }
 
 /// Links embedded in the confirmation email
@@ -77,7 +78,7 @@ pub struct ConfirmationLinks {
 impl TestApp {
     /// Send a subscription request to the application
     pub async fn post_subscriptions(&self, body: String) -> reqwest::Response {
-        reqwest::Client::new()
+        self.api_client
             .post(format!("{}/subscriptions", &self.address))
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(body)
@@ -88,7 +89,7 @@ impl TestApp {
 
     /// Send a newsletter request to the application
     pub async fn post_newsletters(&self, body: serde_json::Value) -> reqwest::Response {
-        reqwest::Client::new()
+        self.api_client
             .post(format!("{}/newsletters", &self.address))
             .basic_auth(&self.test_user.username, Some(&self.test_user.password))
             .json(&body)
@@ -122,6 +123,29 @@ impl TestApp {
             html: get_link(body["HtmlBody"].as_str().unwrap()),
             plain_text: get_link(body["TextBody"].as_str().unwrap()),
         }
+    }
+
+    pub async fn post_login<Body>(&self, body: &Body) -> reqwest::Response
+    where
+        Body: serde::Serialize,
+    {
+        self.api_client
+            .post(format!("{}/login", &self.address))
+            .form(body)
+            .send()
+            .await
+            .expect("Failed to execute request.")
+    }
+
+    pub async fn get_login_html(&self) -> String {
+        self.api_client
+            .get(format!("{}/login", &self.address))
+            .send()
+            .await
+            .expect("Failed to execute request.")
+            .text() // Get the response body as text to verify that the error message is properly rendered in the HTML response when we access the login page after a failed login attempt.
+            .await
+            .expect("Failed to read response body.")
     }
 }
 
@@ -189,14 +213,37 @@ pub async fn spawn_app() -> TestApp {
     let application_port = application.port();
     let _ = tokio::spawn(application.run_until_stopped());
 
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none()) // allow redirects to capture the 303 response
+        .cookie_store(true) // Enable cookie store to automatically handle cookies set by the server, such as flash messages, and include them in subsequent requests. This is important for tests that need to verify the presence of cookies or rely on cookies for session management.
+        .build()
+        .unwrap();
+
     let test_app = TestApp {
         address: format!("http://127.0.0.1:{}", application_port),
         port: application_port,
         db_pool: get_connection_pool(&configuration.database).await,
         email_server,
         test_user: TestUser::generate(),
+        api_client: client,
     };
     // Store the test user in the test database
     test_app.test_user.store(&test_app.db_pool).await;
     test_app
+}
+
+/// Utility function to assert that the response is a 303 redirect to the given location
+pub fn assert_is_redirect_to(response: &reqwest::Response, location: &str) {
+    assert_eq!(
+        response.status().as_u16(),
+        303,
+        "Expected a 303 See Other response, got {}",
+        response.status()
+    );
+    let headers = response.headers();
+    assert_eq!(
+        headers.get("Location").map(|value| value.to_str().unwrap()),
+        Some(location),
+        "Expected a Location header in the response, but it was missing."
+    );
 }

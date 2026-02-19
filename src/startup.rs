@@ -1,8 +1,11 @@
 use crate::configuration::{DatabaseSettings, Settings};
 use crate::email_client::EmailClient;
-use crate::routes::{confirm, health_check, home, login, login_form, publish_newsletter, subscribe};
+use crate::routes::{
+    confirm, health_check, home, login, login_form, publish_newsletter, subscribe,
+};
 use actix_web::dev::Server;
 use actix_web::{web, App, HttpServer};
+use secrecy::SecretString;
 use sqlx::PgPool;
 use std::net::TcpListener;
 use tracing_actix_web::TracingLogger;
@@ -58,6 +61,7 @@ impl Application {
             connection_pool,
             email_client,
             configuration.application.base_url,
+            HmacSecret(configuration.application.hmac_secret),
         )?;
 
         // We save the port number and server instance for later use
@@ -86,6 +90,7 @@ pub fn run(
     db_pool: PgPool,
     email_client: EmailClient,
     base_url: String,
+    hmac_secret: HmacSecret,
 ) -> Result<Server, std::io::Error> {
     // web::Data is a smart pointer Arc<T> around a type T that allows sharing
     // state across different handlers in a thread-safe way.
@@ -109,9 +114,13 @@ pub fn run(
             .app_data(db_pool.clone()) // Register the DB connection as part of the application state: stateful remember of the DB connection
             .app_data(email_client.clone()) // Register the email client as part of the application state
             .app_data(base_url.clone())
+            .app_data(web::Data::new(hmac_secret.clone())) // Register the HMAC secret as part of the application state
     })
     .listen(listener)?
     .run();
 
     Ok(server)
 }
+
+#[derive(Clone, Debug)]
+pub struct HmacSecret(pub SecretString);

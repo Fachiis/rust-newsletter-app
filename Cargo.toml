@@ -34,7 +34,6 @@ tracing-actix-web = "0.7" # For integrating tracing with actix-web
 serde-aux = "4" # For auxiliary serde functionality, like deserializing number from string
 unicode-segmentation = "1" # For handling Unicode string segmentation
 validator = "0.20" # For validating input data
-reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] } # For making HTTP requests in tests
 rand = { version = "0.8", features = ["std_rng"] } # For generating random values
 thiserror = "2" # For deriving error types
 anyhow = "1" # For easy error handling
@@ -42,6 +41,14 @@ base64 = "0.22.1" # For base64 encoding and decoding
 argon2 = { version = "0.5.3", features = ["std"] } # For Argon2 password hashing
 urlencoding = "2" # For URL encoding and decoding
 htmlescape = "0.3" # For HTML escaping and unescaping
+[dependencies.reqwest]
+version = "0.11"
+default-features = false
+features = [
+    "json", # For JSON support
+    "rustls-tls", # For using Rustls as the TLS implementation
+    "cookies", # For cookie support
+]
 
 [dependencies.sqlx]
 version = "0.8.6"

@@ -3,8 +3,13 @@ use crate::email_client::EmailClient;
 use crate::routes::{
     confirm, health_check, home, login, login_form, publish_newsletter, subscribe,
 };
+use actix_session::{storage::RedisSessionStore, SessionMiddleware};
+use actix_web::cookie::Key;
 use actix_web::dev::Server;
 use actix_web::{web, App, HttpServer};
+use actix_web_flash_messages::storage::CookieMessageStore;
+use actix_web_flash_messages::FlashMessagesFramework;
+use secrecy::ExposeSecret;
 use secrecy::SecretString;
 use sqlx::PgPool;
 use std::net::TcpListener;
@@ -32,7 +37,7 @@ pub struct Application {
 }
 
 impl Application {
-    pub async fn build(configuration: Settings) -> Result<Self, std::io::Error> {
+    pub async fn build(configuration: Settings) -> Result<Self, anyhow::Error> {
         // Set up the db pool connection
         let connection_pool = get_connection_pool(&configuration.database).await;
 
@@ -62,7 +67,9 @@ impl Application {
             email_client,
             configuration.application.base_url,
             HmacSecret(configuration.application.hmac_secret),
-        )?;
+            configuration.redis_uri,
+        )
+        .await?;
 
         // We save the port number and server instance for later use
         Ok(Self { port, server })
@@ -85,13 +92,14 @@ impl Application {
 // By defining a new type, we ensure that there are no conflicts with other String dependencies.
 pub struct ApplicationBaseUrl(pub String);
 
-pub fn run(
+async fn run(
     listener: TcpListener,
     db_pool: PgPool,
     email_client: EmailClient,
     base_url: String,
     hmac_secret: HmacSecret,
-) -> Result<Server, std::io::Error> {
+    redis_uri: SecretString,
+) -> Result<Server, anyhow::Error> {
     // web::Data is a smart pointer Arc<T> around a type T that allows sharing
     // state across different handlers in a thread-safe way.
     // With this, we have a cheap clone of the pointer instead of cloning the whole connection,
@@ -100,10 +108,18 @@ pub fn run(
     let email_client = web::Data::new(email_client);
     let base_url = web::Data::new(ApplicationBaseUrl(base_url));
 
+    let secret_key = Key::from(hmac_secret.0.expose_secret().as_bytes());
+    let message_store = CookieMessageStore::builder(secret_key.clone()).build(); // Create a message store for flash messages using cookies. This will allow us to store flash messages in cookies and retrieve them in subsequent requests. The Key is used to encrypt and decrypt the flash messages stored in the cookies, ensuring that the messages are secure and cannot be tampered with by the client.
+    let message_framework = FlashMessagesFramework::builder(message_store).build();
+
+    let redis_store = RedisSessionStore::new(redis_uri.expose_secret()).await?;
+
     // Beware: app instance is created for each worker thread -  the cost of a string allocation (or a pointer clone) is negligible compared to the cost of handling a request - so it's ok to clone the db_pool here
     let server = HttpServer::new(move || {
         App::new()
-            .wrap(TracingLogger::default())
+            .wrap(message_framework.clone()) // Add the flash messages framework middleware to handle flash messages across requests.
+            .wrap(SessionMiddleware::new(redis_store.clone(), secret_key.clone()))
+            .wrap(TracingLogger::default()) // Add the tracing logger middleware to log incoming requests and their details, such as the request method, path, response status, and processing time. This is useful for monitoring and debugging purposes, as it provides insights into the behavior of the application and helps identify potential issues or bottlenecks.
             .route("/", web::get().to(home))
             .route("/login", web::get().to(login_form))
             .route("/login", web::post().to(login))

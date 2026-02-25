@@ -41,6 +41,7 @@ base64 = "0.22.1" # For base64 encoding and decoding
 argon2 = { version = "0.5.3", features = ["std"] } # For Argon2 password hashing
 urlencoding = "2" # For URL encoding and decoding
 htmlescape = "0.3" # For HTML escaping and unescaping
+actix-web-flash-messages = { version = "0.3", features = ["cookies"] } # For flash message support in actix-web
 [dependencies.reqwest]
 version = "0.11"
 default-features = false
@@ -61,6 +62,10 @@ features = [
     "chrono", # Support for the `chrono` crate. Needed for date and time handling
     "migrate", # Support for database migrations,
 ]
+[dependencies.actix-session]
+git = "https://github.com/actix/actix-extras"
+branch = "main"
+features = ["redis-session-native-tls"] # Enable Redis support for session storage
 
 # Used exclusively for testing or when running examples. They do not get compiled into the final binary.
 [dev-dependencies]
